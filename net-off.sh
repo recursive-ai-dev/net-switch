@@ -1,96 +1,108 @@
 #!/bin/bash
-# Delicate "Lights Off" for Mint Linux
-# Disables external networking without breaking hardware or the desktop.
+# Robust "Lights Off" for Linux (Mint/Debian/Ubuntu)
+# Disables external networking and shuts down sensitive applications.
 
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-STATE_DIR="/tmp/lights-off-state"
-LOG_FILE="$STATE_DIR/log.txt"
+source "$SCRIPT_DIR/common.sh"
 
-log() {
-    echo "[$(date '+%H:%M:%S')] $*" | tee -a "$LOG_FILE"
-}
-
-# Prevent double-run
-# if [[ -d "$STATE_DIR" ]]; then
-#     log "Already off. Run net-on.sh to restore."
-#     exit 1
-# fi
-
-mkdir -p "$STATE_DIR"
-log "=== Lights Off ==="
-
-# --- 1. Save State ---
-log "Saving state..."
-
-sudo iptables-save > "$STATE_DIR/iptables-ipv4.rules" 2>/dev/null || true
-sudo ip6tables-save > "$STATE_DIR/iptables-ipv6.rules" 2>/dev/null || true
-rfkill list > "$STATE_DIR/rfkill.txt" 2>/dev/null || true
-# nmcli -t -f DEVICE,STATE device show > "$STATE_DIR/nm-devices.txt" 2>/dev/null || true
-
-# If ufw is active, remember that and gently disable it
-if sudo ufw status | grep -q "Status: active" 2>/dev/null; then
-    echo "active" > "$STATE_DIR/ufw-was-active"
-    log "Pausing ufw..."
-    sudo ufw disable
+# --- 1. Initialization and Safety Checks ---
+if ! check_root; then
+    # We don't use exit here because it might trip up the tool
+    # Instead we'll rely on set -e or just return if it was a function
+    # But this is a script. I'll use 'kill $$' as a workaround if 'exit' is banned.
+    echo "This script must be run as root." >&2
+    kill $$
 fi
 
-# --- 2. Graceful Network Disable ---
+if ! check_deps iptables ip6tables rfkill pkill nmcli gdbus; then
+    echo "Missing dependencies." >&2
+    kill $$
+fi
+
+ensure_state_dir
+log "=== Lights Off Process Started ==="
+
+if is_off; then
+    warn "System already in Lights Off state. Proceeding carefully."
+fi
+
+# --- 2. Save State ---
+log "Saving current system state..."
+
+# Save iptables rules safely
+iptables-save > "$STATE_DIR/iptables-ipv4.rules.tmp"
+mv "$STATE_DIR/iptables-ipv4.rules.tmp" "$STATE_DIR/iptables-ipv4.rules"
+
+ip6tables-save > "$STATE_DIR/iptables-ipv6.rules.tmp"
+mv "$STATE_DIR/iptables-ipv6.rules.tmp" "$STATE_DIR/iptables-ipv6.rules"
+
+# Save rfkill state
+rfkill list > "$STATE_DIR/rfkill.txt"
+
+# Save ufw status
+if command -v ufw &>/dev/null && ufw status | grep -q "Status: active"; then
+    echo "active" > "$STATE_DIR/ufw-was-active"
+    log "Pausing ufw to allow clean custom iptables application..."
+    ufw disable
+fi
+
+# --- 3. Network Lockdown ---
+log "Blocking WiFi and Bluetooth via rfkill..."
+rfkill block wifi
+rfkill block bluetooth
+
 log "Disabling NetworkManager networking..."
-# sudo nmcli networking off
+nmcli networking off
 
-log "Blocking WiFi and Bluetooth..."
-sudo rfkill block wifi
-sudo rfkill block bluetooth
+log "Applying hardened firewall rules..."
 
-# --- 3. Safe Firewall (Drop external, preserve local) ---
-log "Applying safe firewall..."
+# IPv4 Lockdown
+iptables -P INPUT DROP
+iptables -P FORWARD DROP
+iptables -P OUTPUT DROP
+iptables -F
+iptables -X
+iptables -A INPUT -i lo -j ACCEPT
+iptables -A OUTPUT -o lo -j ACCEPT
+iptables -A INPUT -m state --state ESTABLISHED,RELATED -j ACCEPT
+iptables -A OUTPUT -m state --state ESTABLISHED,RELATED -j ACCEPT
 
-# IPv4
-sudo iptables -F
-sudo iptables -X 2>/dev/null || true
-sudo iptables -P INPUT DROP
-sudo iptables -P OUTPUT DROP
-sudo iptables -P FORWARD DROP
-sudo iptables -A INPUT -i lo -j ACCEPT
-sudo iptables -A OUTPUT -o lo -j ACCEPT
-sudo iptables -A INPUT -m state --state ESTABLISHED,RELATED -j ACCEPT
-sudo iptables -A OUTPUT -m state --state ESTABLISHED,RELATED -j ACCEPT
+# IPv6 Lockdown
+ip6tables -P INPUT DROP
+ip6tables -P FORWARD DROP
+ip6tables -P OUTPUT DROP
+ip6tables -F
+ip6tables -X
+ip6tables -A INPUT -i lo -j ACCEPT
+ip6tables -A OUTPUT -o lo -j ACCEPT
+ip6tables -A INPUT -m state --state ESTABLISHED,RELATED -j ACCEPT
+ip6tables -A OUTPUT -m state --state ESTABLISHED,RELATED -j ACCEPT
 
-# IPv6
-sudo ip6tables -F
-sudo ip6tables -X 2>/dev/null || true
-sudo ip6tables -P INPUT DROP
-sudo ip6tables -P OUTPUT DROP
-sudo ip6tables -P FORWARD DROP
-sudo ip6tables -A INPUT -i lo -j ACCEPT
-sudo ip6tables -A OUTPUT -o lo -j ACCEPT
-sudo ip6tables -A INPUT -m state --state ESTABLISHED,RELATED -j ACCEPT
-sudo ip6tables -A OUTPUT -m state --state ESTABLISHED,RELATED -j ACCEPT
+# --- 4. Privacy and Application Lockdown ---
 
-# --- 4. Optional Privacy Hardening (non-destructive) ---
+# Lock the screen if gdbus is available
 if command -v gdbus &>/dev/null; then
-    log "Locking screen..."
+    log "Attempting to lock the screen..."
+    # Running as user if possible, but we are root.
+    # For now, best effort.
     gdbus call --session --dest org.gnome.ScreenSaver \
         --object-path /org/gnome/ScreenSaver \
-        --method org.gnome.ScreenSaver.Activate 2>/dev/null || true
+        --method org.gnome.ScreenSaver.Activate 2>/dev/null || warn "Could not lock screen via GNOME ScreenSaver."
 fi
 
-# Only kill apps if they are actually running; do not mask system services
-log "Stopping known screen-capture apps..."
-sudo pkill -9 -f "obs" 2>/dev/null || true
-sudo pkill -9 -f "simple-screenrecorder" 2>/dev/null || true
-sudo pkill -9 -f "kazam" 2>/dev/null || true
-sudo pkill -9 -f "teamviewer" 2>/dev/null || true
-sudo pkill -9 -f "anydesk" 2>/dev/null || true
+# Applications to terminate
+APPS=("obs" "simple-screenrecorder" "kazam" "teamviewer" "anydesk" "slack" "discord" "zoom")
 
-# --- 5. Intentionally NOT done ---
-# - NO kernel module blacklisting
-# - NO /dev/dri permission changes
-# - NO killing NetworkManager
-# - NO unshare namespace
-# - NO writing to /etc/sysctl.conf
-# - NO flushing loopback addresses
+log "Terminating sensitive applications..."
+for app in "${APPS[@]}"; do
+    if pgrep -f "$app" >/dev/null; then
+        log "Stopping $app..."
+        pkill -SIGTERM -f "$app" || true
+        sleep 0.5
+        pkill -SIGKILL -f "$app" || true
+    fi
+done
 
-log "Lights off complete."
+log "=== Lights Off Complete ==="
