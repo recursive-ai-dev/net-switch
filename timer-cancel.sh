@@ -1,19 +1,21 @@
 #!/bin/bash
-# Cancel a running lights-off timer
+# Cancel a running lights-off timer.
 
-PID_FILE="/tmp/lights-timer.pid"
+set -euo pipefail
 
-if [[ ! -f "$PID_FILE" ]]; then
-    echo "No timer is currently running."
-    exit 0
-fi
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+source "$SCRIPT_DIR/common.sh"
 
-PID=$(cat "$PID_FILE")
-
-if kill "$PID" 2>/dev/null; then
-    echo "Timer (PID $PID) cancelled."
+if ! PID=$(get_timer_pid); then
+    echo "No active timer found."
 else
-    echo "Timer (PID $PID) already expired."
+    log "Cancelling timer (PID $PID)..."
+    if kill "$PID" 2>/dev/null; then
+        echo "Timer cancelled."
+    else
+        warn "Timer (PID $PID) could not be killed (maybe already expired)."
+    fi
+    # The timer script's trap should handle PID_FILE removal,
+    # but we'll ensure it's gone.
+    rm -f "$PID_FILE"
 fi
-
-rm -f "$PID_FILE"
