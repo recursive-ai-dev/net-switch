@@ -25,19 +25,25 @@ log "Scheduling lights-off in $DELAY seconds..."
 
 # Use a subshell to background the timer
 (
-    # Set the PID file immediately within the subshell
-    echo "$BASHPID" > "$PID_FILE"
-
     # Handle cleanup on exit (normal or signal)
     trap 'rm -f "$PID_FILE"' EXIT
+    # When receiving TERM, kill sleep immediately
+    trap 'kill -TERM $SLEEP_PID 2>/dev/null || true' TERM
 
-    sleep "$DELAY"
+    sleep "$DELAY" &
+    SLEEP_PID=$!
+    wait $SLEEP_PID
 
-    log "Timer expired. Executing net-off.sh..."
-    bash "$SCRIPT_DIR/net-off.sh"
+    # Only run net-off if wait succeeded (not interrupted by TERM)
+    if [ $? -eq 0 ]; then
+        log "Timer expired. Executing net-off.sh..."
+        bash "$SCRIPT_DIR/net-off.sh"
+    fi
 ) &
 
 TIMER_PID=$!
+# Write PID to file synchronously
+echo "$TIMER_PID" > "$PID_FILE"
 disown "$TIMER_PID"
 
 echo "Timer started in background. PID: $TIMER_PID"

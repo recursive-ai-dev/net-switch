@@ -4,7 +4,7 @@
 # --- Configuration ---
 STATE_DIR="/tmp/lights-off-state"
 PID_FILE="/tmp/lights-timer.pid"
-LOG_FILE="$STATE_DIR/log.txt"
+LOG_FILE="/tmp/lights-off.log"
 
 # --- Utilities ---
 
