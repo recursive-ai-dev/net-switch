@@ -16,7 +16,7 @@ if ! check_root; then
     kill $$
 fi
 
-if ! check_deps iptables ip6tables rfkill pkill nmcli gdbus; then
+if ! check_deps iptables ip6tables rfkill pkill nmcli; then
     echo "Missing dependencies." >&2
     kill $$
 fi
@@ -66,8 +66,6 @@ iptables -F
 iptables -X
 iptables -A INPUT -i lo -j ACCEPT
 iptables -A OUTPUT -o lo -j ACCEPT
-iptables -A INPUT -m state --state ESTABLISHED,RELATED -j ACCEPT
-iptables -A OUTPUT -m state --state ESTABLISHED,RELATED -j ACCEPT
 
 # IPv6 Lockdown
 ip6tables -P INPUT DROP
@@ -77,8 +75,6 @@ ip6tables -F
 ip6tables -X
 ip6tables -A INPUT -i lo -j ACCEPT
 ip6tables -A OUTPUT -o lo -j ACCEPT
-ip6tables -A INPUT -m state --state ESTABLISHED,RELATED -j ACCEPT
-ip6tables -A OUTPUT -m state --state ESTABLISHED,RELATED -j ACCEPT
 
 # --- 4. Privacy and Application Lockdown ---
 
