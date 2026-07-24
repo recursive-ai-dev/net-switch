@@ -19,7 +19,7 @@ fi
 
 echo "--- Network State ---"
 if command -v nmcli &>/dev/null; then
-    NM_STATE=$(nmcli networking connectivity check 2>/dev/null || nmcli networking connectivity)
+    NM_STATE=$(nmcli networking connectivity check 2>/dev/null || nmcli networking connectivity 2>/dev/null || echo "unknown")
     echo "NetworkManager Connectivity: $NM_STATE"
 else
     echo "nmcli not found. Cannot check connectivity."

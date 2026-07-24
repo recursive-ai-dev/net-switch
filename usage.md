@@ -34,10 +34,11 @@ sudo bash net-on.sh
 ### 4. Delayed Lockdown (Timer)
 ```bash
 # Schedule lockdown in 300 seconds (5 minutes)
-bash timer.sh 300
+# Requires root: the timer eventually runs net-off.sh, which requires root itself.
+sudo bash timer.sh 300
 
-# Cancel a running timer
-bash timer-cancel.sh
+# Cancel a running timer (must match the privilege level the timer was started with)
+sudo bash timer-cancel.sh
 ```
 
 ## Architecture
@@ -54,4 +55,4 @@ bash timer-cancel.sh
 - Preserves `lo` (loopback) interface to ensure system stability.
 - Uses `rfkill` for hardware-level radio disabling.
 - State is stored in `/tmp/lights-off-state` with restricted permissions (700).
-- Logs are maintained in `$STATE_DIR/log.txt`.
+- Logs are maintained in `/tmp/lights-off.log`, outside the state directory so they survive the cleanup step in `net-on.sh`.

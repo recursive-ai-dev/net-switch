@@ -53,7 +53,11 @@ get_timer_pid() {
     if [[ -f "$PID_FILE" ]]; then
         local pid
         pid=$(cat "$PID_FILE")
-        if [[ -n "$pid" ]] && kill -0 "$pid" 2>/dev/null; then
+        # kill -0 fails with "permission denied" (not "no such process") when
+        # checking a root-owned timer as a non-root user, which would make an
+        # unprivileged `status.sh` wrongly report no timer running. Fall back
+        # to /proc to detect existence regardless of ownership.
+        if [[ -n "$pid" ]] && { kill -0 "$pid" 2>/dev/null || [[ -d "/proc/$pid" ]]; }; then
             echo "$pid"
             return 0
         fi
