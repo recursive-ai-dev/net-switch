@@ -1,10 +1,18 @@
 #!/bin/bash
-# Report the current system state and network status.
+# status.sh - Report the current system state and network status.
+#
+# Runs WITHOUT root - it intentionally only reads state, never modifies
+# it. It can be invoked by anyone.
+#
+# If you'd like a richer view of the runner's view of the system
+# (registered phases, steps, etc.), run `bash runner.sh list`.
 
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "$SCRIPT_DIR/common.sh"
+# shellcheck source=distro-detect.sh
+source "$SCRIPT_DIR/distro-detect.sh"
 
 echo "=== Lights Off System Status ==="
 
@@ -16,6 +24,9 @@ if is_off; then
 else
     echo "Current Mode: LIGHTS ON (Normal Operations)"
 fi
+
+echo "--- Platform ---"
+distro_summary
 
 echo "--- Network State ---"
 if command -v nmcli &>/dev/null; then
