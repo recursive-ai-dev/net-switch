@@ -1,104 +1,49 @@
 #!/bin/bash
-# Robust "Lights Off" for Linux (Mint/Debian/Ubuntu)
-# Disables external networking and shuts down sensitive applications.
+# net-off.sh - Engage the network lockdown.
+#
+# Backward-compatible entry point. In the original design this script
+# did the whole job inline; now it delegates to runner.sh, which gives
+# us step-by-step confirmation, --dry-run, --verbose, --skip, etc. for
+# free. The previous behavior is preserved when --yes is passed.
+#
+#   sudo bash net-off.sh              # interactive, step-by-step
+#   sudo bash net-off.sh --yes        # old behavior: no prompts
+#   sudo bash net-off.sh --dry-run    # preview the lockdown
+#   sudo bash net-off.sh --verbose    # show every step + function name
+#   sudo bash net-off.sh --skip apps.terminate
 
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "$SCRIPT_DIR/common.sh"
 
-# --- 1. Initialization and Safety Checks ---
-if ! check_root; then
-    # We don't use exit here because it might trip up the tool
-    # Instead we'll rely on set -e or just return if it was a function
-    # But this is a script. I'll use 'kill $$' as a workaround if 'exit' is banned.
-    echo "This script must be run as root." >&2
-    kill $$
-fi
-
-if ! check_deps iptables ip6tables rfkill pkill nmcli; then
-    echo "Missing dependencies." >&2
-    kill $$
-fi
-
-ensure_state_dir
-log "=== Lights Off Process Started ==="
-
-if is_off; then
-    warn "System already in Lights Off state. Proceeding carefully."
-fi
-
-# --- 2. Save State ---
-log "Saving current system state..."
-
-# Save iptables rules safely
-iptables-save > "$STATE_DIR/iptables-ipv4.rules.tmp"
-mv "$STATE_DIR/iptables-ipv4.rules.tmp" "$STATE_DIR/iptables-ipv4.rules"
-
-ip6tables-save > "$STATE_DIR/iptables-ipv6.rules.tmp"
-mv "$STATE_DIR/iptables-ipv6.rules.tmp" "$STATE_DIR/iptables-ipv6.rules"
-
-# Save rfkill state
-rfkill list > "$STATE_DIR/rfkill.txt"
-
-# Save ufw status
-if command -v ufw &>/dev/null && ufw status | grep -q "Status: active"; then
-    echo "active" > "$STATE_DIR/ufw-was-active"
-    log "Pausing ufw to allow clean custom iptables application..."
-    ufw disable
-fi
-
-# --- 3. Network Lockdown ---
-log "Blocking WiFi and Bluetooth via rfkill..."
-rfkill block wifi
-rfkill block bluetooth
-
-log "Disabling NetworkManager networking..."
-nmcli networking off
-
-log "Applying hardened firewall rules..."
-
-# IPv4 Lockdown
-iptables -P INPUT DROP
-iptables -P FORWARD DROP
-iptables -P OUTPUT DROP
-iptables -F
-iptables -X
-iptables -A INPUT -i lo -j ACCEPT
-iptables -A OUTPUT -o lo -j ACCEPT
-
-# IPv6 Lockdown
-ip6tables -P INPUT DROP
-ip6tables -P FORWARD DROP
-ip6tables -P OUTPUT DROP
-ip6tables -F
-ip6tables -X
-ip6tables -A INPUT -i lo -j ACCEPT
-ip6tables -A OUTPUT -o lo -j ACCEPT
-
-# --- 4. Privacy and Application Lockdown ---
-
-# Lock the screen if gdbus is available
-if command -v gdbus &>/dev/null; then
-    log "Attempting to lock the screen..."
-    # Running as user if possible, but we are root.
-    # For now, best effort.
-    gdbus call --session --dest org.gnome.ScreenSaver \
-        --object-path /org/gnome/ScreenSaver \
-        --method org.gnome.ScreenSaver.Activate 2>/dev/null || warn "Could not lock screen via GNOME ScreenSaver."
-fi
-
-# Applications to terminate
-APPS=("obs" "simple-screenrecorder" "kazam" "teamviewer" "anydesk" "slack" "discord" "zoom")
-
-log "Terminating sensitive applications..."
-for app in "${APPS[@]}"; do
-    if pgrep -f "$app" >/dev/null; then
-        log "Stopping $app..."
-        pkill -SIGTERM -f "$app" || true
-        sleep 0.5
-        pkill -SIGKILL -f "$app" || true
-    fi
+# Decide whether we need to self-elevate. Read-only invocations
+# (--help, --dry-run as a "see what would happen" preview) shouldn't
+# trigger a polkit/sudo prompt, because the user just wants to look
+# at the plan. -y/--yes is the canonical "do it for real" signal.
+needs_root=1
+for a in "$@"; do
+    case "$a" in
+        -h|--help|-n|--dry-run)
+            needs_root=0 ;;
+    esac
 done
 
-log "=== Lights Off Complete ==="
+# Re-exec as root via polkit/sudo. The priv layer handles the prompt.
+SELF="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/$(basename "${BASH_SOURCE[0]}")"
+if [[ $needs_root -eq 1 ]]; then
+    common_self_elevate "$SELF" "$@" || exit 1
+fi
+
+# Forward to the runner.
+forwarded=()
+for a in "$@"; do
+    forwarded+=("$a")
+done
+if [[ $needs_root -eq 1 && ${#forwarded[@]} -eq 0 ]]; then
+    # No args at all -> show a brief one-liner then drop into the runner
+    # interactively. The runner itself will prompt per step.
+    echo "net-off.sh: starting staged lockdown (use --yes to skip prompts)"
+fi
+
+exec bash "$SCRIPT_DIR/runner.sh" off "${forwarded[@]}"

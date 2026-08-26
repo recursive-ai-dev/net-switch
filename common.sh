@@ -8,10 +8,18 @@ LOG_FILE="/tmp/lights-off.log"
 
 # --- Utilities ---
 
+# log() writes a timestamped line to stdout *and* to LOG_FILE. The file
+# append is skipped when LIGHTS_OFF_NO_LOG is set (e.g. during a
+# --dry-run, where we want the user to see the trace but don't want
+# the dry-run's phantom entries polluting the real log).
 log() {
     local timestamp
     timestamp=$(date "+%Y-%m-%d %H:%M:%S")
-    echo "[$timestamp] $*" | tee -a "$LOG_FILE" 2>/dev/null || echo "[$timestamp] $*"
+    if [[ -n "${LIGHTS_OFF_NO_LOG:-}" ]]; then
+        echo "[$timestamp] $*"
+    else
+        echo "[$timestamp] $*" | tee -a "$LOG_FILE" 2>/dev/null || echo "[$timestamp] $*"
+    fi
 }
 
 error() {
@@ -72,4 +80,34 @@ ensure_state_dir() {
     fi
     touch "$LOG_FILE"
     chmod 600 "$LOG_FILE"
+}
+
+# --- Self-elevate --------------------------------------------------------
+# Entry-point scripts source common.sh and call common_self_elevate at the
+# very top. If we're not root, we ask the priv layer to re-exec us. This
+# replaces the old `kill $$` pattern with a clean "ask once" experience:
+# the user either gets a polkit popup, a GUI askpass, or a sudo prompt -
+# whatever their desktop is configured for.
+#
+#   SCRIPT="$(cd "$(dirname "$0")" && pwd)/$(basename "$0")"
+#   source "$(dirname "$0")/common.sh"
+#   common_self_elevate "$SCRIPT" "$@" || exit 1
+#
+# We accept the script path as the first arg so priv.sh doesn't have to
+# guess which file is being re-executed (BASH_SOURCE is unreliable once
+# we go through multiple layers of `source`). `common_self_elevate` is
+# a no-op when already root, so it's safe to call unconditionally from
+# every entry point.
+
+_SCRIPT_DIR_LIB="$(cd "$(dirname "${BASH_SOURCE[0]}")" 2>/dev/null && pwd)"
+
+common_self_elevate() {
+    if [[ $EUID -eq 0 ]]; then
+        return 0
+    fi
+    # shellcheck source=priv.sh
+    source "$_SCRIPT_DIR_LIB/priv.sh"
+    # First arg is the script path (convention: see comment above).
+    # Forward the rest as the script's argv.
+    priv_re_exec "$@"
 }
