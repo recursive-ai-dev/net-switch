@@ -170,16 +170,20 @@ _step_lock_nm() {
 }
 
 _step_firewall_drop_all() {
-    iptables -P INPUT DROP
-    iptables -P FORWARD DROP
-    iptables -P OUTPUT DROP
-    iptables -F
-    iptables -X
-    ip6tables -P INPUT DROP
-    ip6tables -P FORWARD DROP
-    ip6tables -P OUTPUT DROP
-    ip6tables -F
-    ip6tables -X
+    iptables-restore << "IN"
+*filter
+:INPUT DROP [0:0]
+:FORWARD DROP [0:0]
+:OUTPUT DROP [0:0]
+COMMIT
+IN
+    ip6tables-restore << "IN"
+*filter
+:INPUT DROP [0:0]
+:FORWARD DROP [0:0]
+:OUTPUT DROP [0:0]
+COMMIT
+IN
     log "All chains flushed; default policy = DROP"
 }
 
